@@ -34,6 +34,19 @@ class ModeloFalso:
 
 
 # --------------------------------------------------
+# CONFIGURACIÓN AUXILIAR
+# --------------------------------------------------
+
+def configuracion_drift():
+    """Devuelve la configuración de emulación de drift."""
+
+    return {
+        "nivel": 0.0,
+        "semilla": 42,
+    }
+
+
+# --------------------------------------------------
 # CARGA DEL MODELO CHAMPION
 # --------------------------------------------------
 
@@ -177,6 +190,7 @@ def test_predecir_genera_probabilidades_y_predicciones(tmp_path):
         },
         "inferencia": {
             "carpeta_salida": str(tmp_path),
+            "drift": configuracion_drift(),
         },
     }
 
@@ -221,6 +235,7 @@ def test_predecir_conserva_columnas_originales(tmp_path):
         },
         "inferencia": {
             "carpeta_salida": str(tmp_path),
+            "drift": configuracion_drift(),
         },
     }
 
@@ -251,6 +266,7 @@ def test_predecir_clasifica_segun_umbral(tmp_path):
         },
         "inferencia": {
             "carpeta_salida": str(tmp_path),
+            "drift": configuracion_drift(),
         },
     }
 
@@ -328,6 +344,9 @@ def test_registrar_inferencia(monkeypatch, tmp_path):
         "registro": {
             "nombre_modelo": "credit-default-model",
         },
+        "inferencia": {
+            "drift": configuracion_drift(),
+        },
     }
 
     flujo.registrar_inferencia.fn(
@@ -344,7 +363,6 @@ def test_registrar_inferencia(monkeypatch, tmp_path):
     assert llamadas["tags"]["modelo_run_id"] == "run_entrenamiento_123"
 
     assert llamadas["metricas"]["filas_predichas"] == 100
-
     assert llamadas["metricas"]["probabilidad_default_media"] == 0.35
 
     assert str(archivo) in llamadas["artefactos"]
