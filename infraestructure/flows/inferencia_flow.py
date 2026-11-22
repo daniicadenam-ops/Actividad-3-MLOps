@@ -1,17 +1,19 @@
 
 """
-Actividad 2: pipeline de inferencia Credit Default.
+Actividad 3: Pipeline de inferencia Credit Default con emulación de Drift.
 
 Pasos:
-cargar modelo champion -> ingesta del lote -> predicción
--> guardar CSV -> registrar en MLflow.
+cargar modelo champion -> ingesta del lote -> emular Drift
+-> predicción -> guardar CSV -> registrar en MLflow.
+
+Niveles de emulación permitidos:
+    0.0: Sin Drift.
+    0.3: Drift moderado.
+    0.6: Drift alto.
 
 El modelo se busca por el alias `champion`.
-Cuando el pipeline de entrenamiento asigna un nuevo champion,
-la inferencia utiliza ese modelo automáticamente.
-
-El run de inferencia guarda la versión del modelo utilizada
-y el run de entrenamiento para mantener la trazabilidad.
+La inferencia utiliza automáticamente el modelo promovido
+por el pipeline de entrenamiento.
 
 Requisitos:
     PREFECT_API_URL=http://localhost:4200/api
@@ -33,6 +35,7 @@ from mlflow.tracking import MlflowClient
 from prefect import flow, task
 
 from scripts.load_data import cargar_datos as leer_datos
+from domain.monitoreo import emular_drift
 
 
 CONFIG = "configs/config.yaml"
@@ -53,13 +56,11 @@ def cargar_champion(cfg):
 
     client = MlflowClient()
 
-    # Obtener versión asociada al alias champion
     version = client.get_model_version_by_alias(
         nombre,
         "champion",
     )
 
-    # Cargar modelo champion
     modelo = mlflow.sklearn.load_model(
         f"models:/{nombre}@champion"
     )
@@ -86,7 +87,6 @@ def ingesta(cfg):
 
     df = leer_datos(cfg["datos"]["ruta"])
 
-    # Evitar solicitar más filas de las disponibles
     n = min(tamano_lote, len(df))
 
     lote = df.sample(
@@ -102,16 +102,29 @@ def ingesta(cfg):
 @task
 def predecir(modelo, lote, cfg):
     """
-    Calcula la probabilidad de incumplimiento de crédito
-    y guarda las predicciones en un CSV.
+    Aplica la emulación de Drift, calcula las probabilidades
+    de incumplimiento y guarda las predicciones en un CSV.
     """
 
     print("Preparando variables para inferencia...")
 
+    # Obtener nivel configurable de Drift
+    nivel_drift = float(
+        cfg["inferencia"]["drift"]["nivel"]
+    )
+
+    # Validar y aplicar emulación de Drift
+    print(f"Aplicando emulación de Drift: {nivel_drift}")
+
+    lote_modificado = emular_drift(
+        lote,
+        nivel_drift,
+    )
+
     # Utilizar las mismas variables del modelo entrenado
     variables = list(modelo.feature_names_in_)
 
-    X = lote[variables]
+    X = lote_modificado[variables]
 
     print(
         f"Prediciendo con modelo "
@@ -121,7 +134,7 @@ def predecir(modelo, lote, cfg):
     # Probabilidad de incumplimiento (clase 1)
     proba = modelo.predict_proba(X)[:, 1]
 
-    resultado = lote.copy()
+    resultado = lote_modificado.copy()
 
     resultado["probabilidad_default"] = proba
 
@@ -141,8 +154,13 @@ def predecir(modelo, lote, cfg):
         exist_ok=True,
     )
 
+    # Diferenciar los archivos según el nivel de Drift
+    nivel_nombre = str(nivel_drift).replace(".", "_")
+
     ruta = carpeta / (
-        f"predicciones_credit_default_{date.today().isoformat()}.csv"
+        f"predicciones_credit_default_"
+        f"drift_{nivel_nombre}_"
+        f"{date.today().isoformat()}.csv"
     )
 
     resultado.to_csv(
@@ -171,8 +189,12 @@ def registrar_inferencia(
 ):
     """
     Registra el resultado de inferencia en MLflow
-    con trazabilidad del modelo utilizado.
+    con trazabilidad del modelo y del nivel de Drift aplicado.
     """
+
+    nivel_drift = float(
+        cfg["inferencia"]["drift"]["nivel"]
+    )
 
     print(
         f"Registrando inferencia para modelo "
@@ -180,23 +202,36 @@ def registrar_inferencia(
     )
 
     with mlflow.start_run(
-        run_name=f"inferencia-credit-default-{date.today().isoformat()}"
+        run_name=(
+            f"inferencia-credit-default-"
+            f"drift-{nivel_drift}-"
+            f"{date.today().isoformat()}"
+        )
     ) as run:
 
         # Tags de trazabilidad
         mlflow.set_tag("fase", "inferencia")
         mlflow.set_tag("modelo_version", version)
+
         mlflow.set_tag(
             "modelo_run_id",
             run_id_entrenamiento,
         )
+
         mlflow.set_tag(
             "modelo_nombre",
             cfg["registro"]["nombre_modelo"],
         )
+
         mlflow.set_tag(
             "dataset",
             "credit-default",
+        )
+
+        # Registrar nivel de Drift aplicado
+        mlflow.set_tag(
+            "nivel_drift",
+            str(nivel_drift),
         )
 
         # Métricas de inferencia
@@ -208,6 +243,11 @@ def registrar_inferencia(
         mlflow.log_metric(
             "probabilidad_default_media",
             proba_media,
+        )
+
+        mlflow.log_metric(
+            "nivel_drift",
+            nivel_drift,
         )
 
         # Guardar archivo de predicciones como artefacto
@@ -232,7 +272,17 @@ def inferencia_flow():
     ) as f:
         cfg = yaml.safe_load(f)
 
-    # 2. Configurar MLflow
+    # 2. Validar configuración de Drift
+    nivel_drift = float(
+        cfg["inferencia"]["drift"]["nivel"]
+    )
+
+    if nivel_drift not in (0.0, 0.3, 0.6):
+        raise ValueError(
+            "El nivel de Drift debe ser 0.0, 0.3 o 0.6"
+        )
+
+    # 3. Configurar MLflow
     tracking_uri = os.environ.get(
         "MLFLOW_TRACKING_URI",
         cfg["mlflow"]["tracking_uri"],
@@ -245,23 +295,24 @@ def inferencia_flow():
     )
 
     print(f"MLflow Tracking URI: {tracking_uri}")
+    print(f"Nivel de Drift seleccionado: {nivel_drift}")
 
-    # 3. Cargar modelo champion
+    # 4. Cargar modelo champion
     modelo, version, run_id_entrenamiento = cargar_champion(
         cfg
     )
 
-    # 4. Ingestar lote
+    # 5. Ingestar lote
     lote = ingesta(cfg)
 
-    # 5. Generar predicciones
+    # 6. Aplicar Drift y generar predicciones
     ruta, filas, proba_media = predecir(
         modelo,
         lote,
         cfg,
     )
 
-    # 6. Registrar inferencia en MLflow
+    # 7. Registrar inferencia en MLflow
     registrar_inferencia(
         version,
         run_id_entrenamiento,

@@ -1,6 +1,6 @@
 
 """Lógica de negocio del modelo Credit Default: variables,
-pipeline y métricas.
+pipeline de preprocesamiento, codificación y métricas.
 """
 
 from sklearn.compose import ColumnTransformer
@@ -17,11 +17,12 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 
 # Variables del modelo.
 # ID es identificador y no se utiliza como predictor.
+
 NUMERICAS = [
     "LIMIT_BAL",
     "AGE",
@@ -42,9 +43,10 @@ NUMERICAS = [
     "PAY_AMT3",
     "PAY_AMT4",
     "PAY_AMT5",
-    "PAY_AMT6"
+    "PAY_AMT6",
 ]
 
+# Variables categóricas: se codifican con One-Hot Encoder.
 CATEGORICAS = [
     "SEX",
     "EDUCATION",
@@ -102,9 +104,14 @@ def construir_modelo(
     categoricas
 ):
     """
-    Preprocesado más el estimador elegido en configuración.
+    Construye un pipeline compuesto por:
 
-    Los modelos utilizan exclusivamente las variables seleccionadas.
+    1. Estandarización de variables numéricas.
+    2. Codificación One-Hot de variables categóricas.
+    3. Entrenamiento del estimador seleccionado.
+
+    El preprocesamiento se ajusta únicamente con los datos
+    de entrenamiento cuando se ejecuta fit().
     """
 
     if tipo == "logistic_regression":
@@ -123,19 +130,28 @@ def construir_modelo(
 
     transformadores = []
 
+    # Preprocesamiento de variables numéricas.
     if numericas:
         transformadores.append(
             ("num", StandardScaler(), numericas)
         )
 
+    # Codificación de variables categóricas.
     if categoricas:
         transformadores.append(
-            ("cat", "passthrough", categoricas)
+            (
+                "cat",
+                OneHotEncoder(
+                    handle_unknown="ignore",
+                    sparse_output=False,
+                ),
+                categoricas,
+            )
         )
 
     preprocesado = ColumnTransformer(
-        transformadores,
-        remainder="drop"
+        transformers=transformadores,
+        remainder="drop",
     )
 
     return Pipeline([

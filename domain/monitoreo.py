@@ -236,6 +236,53 @@ def _subir_tasa(objetivo, subida, rng):
 
     return subidos
 
+COLUMNAS_DRIFT = [
+    "LIMIT_BAL",
+    "BILL_AMT1",
+    "BILL_AMT2",
+    "BILL_AMT3",
+    "BILL_AMT4",
+    "BILL_AMT5",
+    "BILL_AMT6",
+    "PAY_AMT1",
+    "PAY_AMT2",
+    "PAY_AMT3",
+    "PAY_AMT4",
+    "PAY_AMT5",
+    "PAY_AMT6",
+]
+
+# ============================================================
+# 3.1 Funcion de emulacion de drift para pruebas unitarias
+# ============================================================
+
+def emular_drift(lote, nivel):
+    """
+    Aplica una perturbación controlada a las variables financieras.
+
+    Niveles permitidos:
+        0.0: sin modificaciones.
+        0.3: incremento del 30%.
+        0.6: incremento del 60%.
+    """
+
+    if nivel not in (0.0, 0.3, 0.6):
+        raise ValueError(
+            "El nivel de Drift debe ser 0.0, 0.3 o 0.6"
+        )
+
+    lote_modificado = lote.copy()
+
+    if nivel == 0.0:
+        return lote_modificado
+
+    for columna in COLUMNAS_DRIFT:
+        if columna in lote_modificado.columns:
+            lote_modificado[columna] = (
+                lote_modificado[columna] * (1 + nivel)
+            )
+
+    return lote_modificado
 
 # ============================================================
 # 4. RESULTADOS DE EVIDENTLY

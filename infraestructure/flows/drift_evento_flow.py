@@ -3,19 +3,14 @@
 Actividad 3: monitoreo de drift de evento (Target Drift).
 
 Compara la proporción de incumplimiento de pago del lote
-de inferencia con la proporción del conjunto de entrenamiento.
+con la proporción del conjunto de entrenamiento.
 
 Proyecto: Credit Default
 Variable objetivo: default_payment_next_month
-
-Ejecución desde la raíz del proyecto:
-    poetry run python -m infraestructure.flows.drift_evento_flow
 """
 
-import pandas as pd
 import yaml
 
-from pathlib import Path
 from prefect import flow, task
 
 from domain.monitoreo import (
@@ -25,7 +20,7 @@ from domain.monitoreo import (
     validar_lote,
 )
 
-from scripts.load_data import cargar_datos
+from scripts.load_data import cargar_datos, cargar_lote
 
 
 CONFIG = "configs/config.yaml"
@@ -35,7 +30,6 @@ CONFIG = "configs/config.yaml"
 def referencia(cfg):
     """
     Obtiene la variable objetivo del conjunto de entrenamiento.
-    Esta será la referencia para comparar el lote de inferencia.
     """
 
     df = cargar_datos(cfg["datos"]["ruta"])
@@ -64,16 +58,9 @@ def evaluar_evento(referencia_objetivo, ruta_lote, cfg):
     con la referencia del entrenamiento.
     """
 
-    ruta = Path(ruta_lote)
+    lote = cargar_lote(ruta_lote)
 
-    if not ruta.exists():
-        raise FileNotFoundError(
-            f"No se encontró el lote de inferencia: {ruta}"
-        )
-
-    lote = pd.read_csv(ruta)
-
-    # Validar que el lote tenga etiquetas reales
+    # Validar que el lote tenga etiquetas reales.
     validar_lote(lote)
 
     resultado = drift_de_target(
@@ -104,22 +91,18 @@ def evaluar_evento(referencia_objetivo, ruta_lote, cfg):
 @task
 def alerta(resultado, alfa):
     """
-    Genera una alerta cuando se detecta
-    un cambio estadísticamente significativo
-    en la proporción de incumplimiento.
+    Genera una alerta cuando existe un cambio
+    estadísticamente significativo.
     """
 
     hay_alerta = resultado["drift"]
 
     if hay_alerta:
-
         print(
             f"ALERTA: se detectó drift en {OBJETIVO}. "
             f"P-valor {resultado['p_valor']:.6f} < {alfa}"
         )
-
     else:
-
         print(
             f"Sin alerta: no se detectó drift significativo "
             f"en {OBJETIVO}. "
@@ -135,17 +118,14 @@ def drift_evento_flow():
     with open(CONFIG, encoding="utf-8") as archivo:
         cfg = yaml.safe_load(archivo)
 
-    # Datos de referencia
     referencia_objetivo = referencia(cfg)
 
-    # Evaluación del lote de inferencia
     resultado = evaluar_evento(
         referencia_objetivo,
         cfg["monitoreo"]["lote_actual"],
         cfg,
     )
 
-    # Generación de alerta
     return alerta(
         resultado,
         cfg["monitoreo"]["alfa_evento"],

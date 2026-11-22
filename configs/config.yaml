@@ -1,20 +1,30 @@
 
+# ============================================================
 # CONFIGURACIÓN DEL PROYECTO MLOps - CREDIT DEFAULT
+# ============================================================
 
-# Datos
+# ------------------------------------------------------------
+# 1. DATOS
+# ------------------------------------------------------------
+
 datos:
   ruta: "data/default of credit card clients.csv"
   target: "default_payment_next_month"
   id: "ID"
 
 
-# División de entrenamiento y prueba
+# ------------------------------------------------------------
+# 2. DIVISIÓN DE ENTRENAMIENTO Y PRUEBA
+# ------------------------------------------------------------
+
 division:
   test_size: 0.2
   random_state: 42
 
 
-# CONJUNTOS DE FEATURES
+# ------------------------------------------------------------
+# 3. CONJUNTOS DE FEATURES
+# ------------------------------------------------------------
 
 features:
   - nombre: all
@@ -46,7 +56,9 @@ features:
       - PAY_AMT6
 
 
-# MODELOS CANDIDATOS
+# ------------------------------------------------------------
+# 4. MODELOS CANDIDATOS
+# ------------------------------------------------------------
 
 candidatos:
   - nombre_run: credit-logreg-c1
@@ -73,51 +85,78 @@ candidatos:
       random_state: 42
 
 
-# MLFLOW
+# ------------------------------------------------------------
+# 5. MLFLOW
+# ------------------------------------------------------------
 
 mlflow:
-  tracking_uri: http://localhost:5000
-  experimento: credit-default-training
-  nombre_run: credit-default-training
+  tracking_uri: "http://localhost:5000"
+  experimento: "credit-default-training"
+  nombre_run: "credit-default-training"
 
-# MÉTRICAS
+
+# ------------------------------------------------------------
+# 6. MÉTRICAS
+# ------------------------------------------------------------
 
 metricas:
   umbral: 0.5
 
-# REGISTRO DEL MODELO
+
+# ------------------------------------------------------------
+# 7. REGISTRO DEL MODELO
+# ------------------------------------------------------------
 
 registro:
-  nombre_modelo: credit-default-model
+  nombre_modelo: "credit-default-model"
   umbral_auc: 0.75
 
 
-# INFERENCIA
+# ------------------------------------------------------------
+# 8. INFERENCIA Y EMULACIÓN DE DRIFT
+# ------------------------------------------------------------
 
 inferencia:
   tamano_lote: 100
-  carpeta_salida: "data"
 
-# MONITOREO Y DETECCIÓN DE DRIFT - ACTIVIDAD 3
+  # Carpeta donde se guardan los archivos de predicciones
+  carpeta_salida: "data/predicciones"
+
+  # Configuración de emulación
+  drift:
+    # Valores permitidos: 0.0, 0.3 y 0.6
+    nivel: 0.6
+
+    # Semilla para reproducibilidad
+    semilla: 42
+
+
+# ------------------------------------------------------------
+# 9. MONITOREO Y DETECCIÓN DE DRIFT
+# ------------------------------------------------------------
 
 monitoreo:
 
-  # Target Drift
+  # ------------------------------------------
+  # TARGET DRIFT
+  # ------------------------------------------
 
   # Nivel de significancia estadística
   alfa_evento: 0.05
 
-  # Feature Drift
 
-  # Fracción máxima permitida de variables con drift
+  # ------------------------------------------
+  # FEATURE DRIFT
+  # ------------------------------------------
+
+  # Fracción máxima permitida de variables con Drift
   # 0.30 equivale al 30 %
   umbral_drift: 0.30
 
-  # Lote de inferencia
 
-  lote_actual: "data/predicciones_credit_default.csv"
-
-  # Reportes
+  # ------------------------------------------
+  # REPORTES
+  # ------------------------------------------
 
   # Carpeta donde Evidently guardará los reportes HTML
   carpeta_reportes: "reports/drift"

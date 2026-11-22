@@ -1,26 +1,26 @@
 
 """
-Carga el dataset Default of Credit Card Clients,
-valida sus columnas y muestra su tamaño.
+Carga y valida el dataset Default of Credit Card Clients
+y los lotes generados durante la inferencia.
 
-Por defecto lee `datos.ruta` de configs/config.yaml.
-Las rutas se resuelven desde el directorio de trabajo.
+Por defecto lee datos.ruta de configs/config.yaml.
 
-Ejecución (desde la raíz del proyecto):
+Ejecución:
     poetry run python scripts/load_data.py
 
-Para usarla desde un flow:
-    from scripts.load_data import cargar_datos
+Uso desde los flows:
+    from scripts.load_data import cargar_datos, cargar_lote
 """
 
 from pathlib import Path
+
 import pandas as pd
 import yaml
 
 
 RUTA_CONFIG = "configs/config.yaml"
 
-# Columnas del dataset Default of Credit Card Clients
+# Columnas originales del dataset.
 COLUMNAS = [
     "ID",
     "LIMIT_BAL",
@@ -46,7 +46,7 @@ COLUMNAS = [
     "PAY_AMT4",
     "PAY_AMT5",
     "PAY_AMT6",
-    "default_payment_next_month"
+    "default_payment_next_month",
 ]
 
 TARGET = "default_payment_next_month"
@@ -56,14 +56,55 @@ FEATURES = [
     if col not in ["ID", TARGET]
 ]
 
+# Columnas adicionales generadas por la inferencia.
+COLUMNAS_INFERENCIA = [
+    "probabilidad_default",
+    "prediccion_default",
+]
+
+
+def _leer_csv(ruta):
+    """
+    Lee un CSV, detecta el separador y normaliza
+    los nombres de las columnas.
+    """
+
+    df = pd.read_csv(
+        ruta,
+        sep=None,
+        engine="python",
+        encoding="utf-8-sig",
+    )
+
+    # Eliminar BOM, espacios y normalizar nombres.
+    df.columns = (
+        df.columns
+        .str.replace("\ufeff", "", regex=False)
+        .str.strip()
+        .str.replace(" ", "_")
+    )
+
+    return df
+
+
+def _validar_target(df):
+    """Valida que el target sea binario cuando está presente."""
+
+    if TARGET in df.columns:
+        valores_target = set(df[TARGET].dropna().unique())
+
+        if not valores_target.issubset({0, 1}):
+            raise ValueError(
+                f"El target contiene valores inesperados: "
+                f"{valores_target}"
+            )
+
 
 def cargar_datos(ruta=None):
     """
-    Devuelve el DataFrame Default of Credit Card Clients.
+    Carga el dataset original de entrenamiento.
 
-    Acepta:
-    - Ruta directa al CSV.
-    - None: utiliza datos.ruta de configs/config.yaml.
+    Exige las 25 columnas originales.
     """
 
     if ruta is None:
@@ -77,28 +118,16 @@ def cargar_datos(ruta=None):
             f"No se encontró el dataset: {ruta.resolve()}"
         )
 
-    # Leer CSV separado por punto y coma
-    df = pd.read_csv(
-        ruta,
-        sep=";",
-        encoding="utf-8",
-        low_memory=False
-    )
+    df = _leer_csv(ruta)
 
-    # Normalizar nombre de la variable objetivo
-    df.columns = [
-        col.strip().replace(" ", "_")
-        for col in df.columns
-    ]
-
-    # Validar estructura
+    # Validar cantidad de columnas.
     if df.shape[1] != len(COLUMNAS):
         raise ValueError(
             f"El archivo tiene {df.shape[1]} columnas, "
             f"pero se esperaban {len(COLUMNAS)}."
         )
 
-    # Validar nombres
+    # Validar nombres de columnas.
     if set(df.columns) != set(COLUMNAS):
         raise ValueError(
             "Las columnas del dataset no coinciden con las esperadas.\n"
@@ -106,22 +135,52 @@ def cargar_datos(ruta=None):
             f"Encontradas: {list(df.columns)}"
         )
 
-    # Validar target
-    valores_target = set(df[TARGET].dropna().unique())
+    _validar_target(df)
 
-    if not valores_target.issubset({0, 1}):
-        raise ValueError(
-            f"El target contiene valores inesperados: {valores_target}"
+    return df[COLUMNAS].copy()
+
+
+def cargar_lote(ruta):
+    """
+    Carga un lote de inferencia.
+
+    Permite columnas adicionales como:
+    - probabilidad_default
+    - prediccion_default
+
+    Exige las 23 variables predictoras originales.
+    No exige que el lote tenga exactamente 25 columnas.
+    """
+
+    ruta = Path(ruta)
+
+    if not ruta.exists():
+        raise FileNotFoundError(
+            f"No se encontró el lote de inferencia: {ruta.resolve()}"
         )
+
+    df = _leer_csv(ruta)
+
+    # Verificar que estén todas las variables predictoras.
+    faltantes = [
+        col for col in FEATURES
+        if col not in df.columns
+    ]
+
+    if faltantes:
+        raise ValueError(
+            f"Al lote de inferencia le faltan variables: {faltantes}"
+        )
+
+    # Validar target si el archivo lo contiene.
+    _validar_target(df)
 
     return df.copy()
 
 
 def main():
 
-    ruta = None  # None = datos.ruta de configs/config.yaml
-
-    df = cargar_datos(ruta)
+    df = cargar_datos()
 
     print("Dataset Default of Credit Card Clients")
     print("-" * 50)
@@ -135,6 +194,7 @@ def main():
 
     print("\nDistribución del target:")
     print(df[TARGET].value_counts())
+
     print("\nPrimeras observaciones:")
     print(df.head())
 

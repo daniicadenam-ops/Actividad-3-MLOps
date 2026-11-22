@@ -2,34 +2,22 @@
 """
 Actividad 3: monitoreo de drift de features.
 
-Compara las variables de entrada del lote de inferencia
-con las variables del conjunto de entrenamiento usando Evidently.
-
-Proyecto: Credit Default.
-
-Genera un reporte HTML y emite una alerta cuando la
-fracción de variables con drift supera el umbral configurado.
-
-Ejecución desde la raíz del proyecto:
-    poetry run python -m infraestructure.flows.drift_features_flow
+Compara las variables de entrada del lote de inferencia con
+los datos de entrenamiento usando Evidently.
+Genera un reporte HTML y emite alertas de drift.
 """
 
 from pathlib import Path
+from datetime import date
 
-import pandas as pd
 import yaml
-
 from evidently import Report
 from evidently.presets import DataDriftPreset
 from prefect import flow, task
 
-from domain.monitoreo import (
-    VARIABLES,
-    dividir,
-    fraccion_desde_evidently,
-)
-
-from scripts.load_data import cargar_datos
+from domain.modelo import VARIABLES
+from domain.monitoreo import dividir, fraccion_desde_evidently
+from scripts.load_data import cargar_datos, cargar_lote
 
 
 CONFIG = "configs/config.yaml"
@@ -37,28 +25,20 @@ CONFIG = "configs/config.yaml"
 
 @task
 def referencia(cfg):
-    """
-    Obtiene las variables predictoras del conjunto
-    de entrenamiento. Se utilizan como referencia.
-    """
+    """Obtiene las variables de los datos de entrenamiento."""
 
-    df = cargar_datos(cfg["datos"]["ruta"])
+    print("Cargando datos de referencia...")
 
     entrenamiento, _ = dividir(
-        df,
+        cargar_datos(cfg["datos"]["ruta"]),
         cfg["division"],
     )
 
     datos_referencia = entrenamiento[VARIABLES].copy()
 
     print(
-        f"Datos de referencia cargados: "
-        f"{datos_referencia.shape[0]} registros"
-    )
-
-    print(
-        f"Variables utilizadas para monitoreo: "
-        f"{len(VARIABLES)}"
+        f"Referencia cargada: {len(datos_referencia)} registros "
+        f"y {len(VARIABLES)} variables."
     )
 
     return datos_referencia
@@ -66,50 +46,35 @@ def referencia(cfg):
 
 @task
 def calcular_drift(datos_referencia, ruta_lote, cfg):
-    """
-    Ejecuta el análisis de drift con Evidently
-    y guarda el reporte HTML.
-    """
+    """Compara el lote actual con la referencia y genera el reporte."""
 
-    ruta = Path(ruta_lote)
+    print("\nIniciando evaluación de Drift con Evidently...")
 
-    if not ruta.exists():
+    ruta_lote = Path(ruta_lote)
+
+    if not ruta_lote.exists():
         raise FileNotFoundError(
-            f"No se encontró el lote de inferencia: {ruta}"
+            f"No existe el archivo de inferencia: {ruta_lote}"
         )
 
-    # El archivo de inferencia se genera como CSV estándar
-    lote = pd.read_csv(ruta)
+    lote = cargar_lote(str(ruta_lote))
 
-    # Verificar que existan todas las variables predictoras
-    faltantes = [
-        columna
-        for columna in VARIABLES
-        if columna not in lote.columns
-    ]
-
-    if faltantes:
-        raise ValueError(
-            f"Al lote de inferencia le faltan variables: {faltantes}"
-        )
-
-    # Seleccionar únicamente las variables de entrada
     datos_actuales = lote[VARIABLES].copy()
 
-    print(
-        f"Lote actual cargado: "
-        f"{datos_actuales.shape[0]} registros"
-    )
+    print(f"Lote evaluado: {ruta_lote}")
+    print(f"Registros actuales: {len(datos_actuales)}")
+    print(f"Variables evaluadas: {len(VARIABLES)}")
 
-    # Ejecutar análisis de drift
-    resultado = Report(
-        [DataDriftPreset()]
-    ).run(
+    reporte = Report([
+        DataDriftPreset()
+    ])
+
+    resultado = reporte.run(
         reference_data=datos_referencia,
         current_data=datos_actuales,
     )
 
-    # Crear carpeta para reportes
+    # Crear carpeta de reportes
     carpeta = Path(
         cfg["monitoreo"]["carpeta_reportes"]
     )
@@ -119,25 +84,31 @@ def calcular_drift(datos_referencia, ruta_lote, cfg):
         exist_ok=True,
     )
 
-    # Guardar reporte HTML
+    # Nombre independiente para cada escenario
     ruta_html = carpeta / (
-        f"drift_features_{ruta.stem}.html"
+        f"drift_features_{ruta_lote.stem}.html"
     )
 
+    # Guardar reporte HTML
     resultado.save_html(str(ruta_html))
 
-    print(
-        f"Reporte de drift de features guardado en: "
-        f"{ruta_html}"
-    )
+    if not ruta_html.exists():
+        raise RuntimeError(
+            "Evidently no generó el archivo HTML."
+        )
 
-    # Obtener fracción de variables con drift
+    print("\nREPORTE GENERADO CORRECTAMENTE")
+    print(f"Ubicación: {ruta_html.resolve()}")
+
+    # Obtener resultados estructurados de Evidently
+    resultado_dict = resultado.dict()
+
     fraccion = fraccion_desde_evidently(
-        resultado.dict()
+        resultado_dict
     )
 
     print(
-        f"Fracción de variables con drift: {fraccion:.2%}"
+        f"Proporción de variables con Drift: {fraccion:.2%}"
     )
 
     return fraccion
@@ -145,56 +116,93 @@ def calcular_drift(datos_referencia, ruta_lote, cfg):
 
 @task
 def alerta(fraccion, umbral):
-    """
-    Genera una alerta cuando la proporción de variables
-    con drift supera el umbral configurado.
-    """
+    """Genera una alerta cuando el drift supera el umbral."""
 
     hay_alerta = fraccion > umbral
 
+    print("\n--- RESULTADO DEL MONITOREO ---")
+
     if hay_alerta:
-
         print(
-            f"ALERTA: drift de features en "
-            f"{fraccion:.0%} de las variables "
-            f"(umbral {umbral:.0%})"
+            f"ALERTA: Drift de Features en {fraccion:.2%}. "
+            f"Umbral configurado: {umbral:.2%}"
         )
-
     else:
-
         print(
-            f"Sin alerta: drift de features en "
-            f"{fraccion:.0%} de las variables "
-            f"(umbral {umbral:.0%})"
+            f"Sin alerta: Drift de Features en {fraccion:.2%}. "
+            f"Umbral configurado: {umbral:.2%}"
         )
 
     return hay_alerta
 
 
 @flow(
-    name="drift-features-credit-default",
+    name="drift-features",
     log_prints=True,
 )
 def drift_features_flow():
 
-    with open(CONFIG, encoding="utf-8") as archivo:
-        cfg = yaml.safe_load(archivo)
+    # 1. Leer configuración
+    with open(CONFIG, encoding="utf-8") as f:
+        cfg = yaml.safe_load(f)
 
-    # Obtener referencia del entrenamiento
+    # 2. Obtener nivel de Drift
+    nivel_drift = float(
+        cfg["inferencia"]["drift"]["nivel"]
+    )
+
+    if nivel_drift not in (0.0, 0.3, 0.6):
+        raise ValueError(
+            "El nivel de Drift debe ser 0.0, 0.3 o 0.6"
+        )
+
+    # 3. Construir ruta del archivo de inferencia
+    nivel_nombre = str(nivel_drift).replace(".", "_")
+
+    nombre_archivo = (
+        f"predicciones_credit_default_"
+        f"drift_{nivel_nombre}_"
+        f"{date.today().isoformat()}.csv"
+    )
+
+    ruta_lote = (
+        Path(cfg["inferencia"]["carpeta_salida"])
+        / nombre_archivo
+    )
+
+    print("\n===================================")
+    print("MONITOREO DE DRIFT DE FEATURES")
+    print("===================================")
+    print(f"Nivel de Drift: {nivel_drift}")
+    print(f"Archivo seleccionado: {ruta_lote.resolve()}")
+
+    # 4. Validar que exista el lote
+    if not ruta_lote.exists():
+        raise FileNotFoundError(
+            f"No existe el lote: {ruta_lote.resolve()}. "
+            "Ejecuta primero inferencia_flow.py."
+        )
+
+    # 5. Cargar referencia
     datos_referencia = referencia(cfg)
 
-    # Comparar contra el lote de inferencia
+    # 6. Calcular Drift y generar HTML
     fraccion = calcular_drift(
         datos_referencia,
-        cfg["monitoreo"]["lote_actual"],
+        str(ruta_lote),
         cfg,
     )
 
-    # Evaluar si se genera una alerta
-    return alerta(
+    # 7. Evaluar umbral y generar alerta
+    resultado_alerta = alerta(
         fraccion,
-        cfg["monitoreo"]["umbral_drift"],
+        float(cfg["monitoreo"]["umbral_drift"]),
     )
+
+    print("\nMonitoreo de Features finalizado.")
+    print(f"Reporte guardado en: {Path(cfg['monitoreo']['carpeta_reportes']).resolve()}")
+
+    return resultado_alerta
 
 
 if __name__ == "__main__":
